@@ -1044,9 +1044,19 @@ def get_user_transcription_preferences(uid: str) -> dict:
             'single_language_mode': prefs.get('single_language_mode', False),
             'vocabulary': prefs.get('vocabulary', []),
             'language': user_data.get('language', ''),
+            'provider_preferences': prefs.get('provider_preferences', {}),
+            'terminology': prefs.get('terminology', {}),
+            'enable_ja_filler_cleanup': prefs.get('enable_ja_filler_cleanup', False),
         }
 
-    return {'single_language_mode': False, 'vocabulary': [], 'language': ''}
+    return {
+        'single_language_mode': False,
+        'vocabulary': [],
+        'language': '',
+        'provider_preferences': {},
+        'terminology': {},
+        'enable_ja_filler_cleanup': False,
+    }
 
 
 def get_agent_vm(uid: str) -> Optional[dict]:

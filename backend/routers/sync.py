@@ -47,7 +47,6 @@ from utils.other.storage import (
 from utils import encryption
 from utils.log_sanitizer import sanitize
 from utils.stt.pre_recorded import deepgram_prerecorded, get_deepgram_model_for_language, postprocess_words
-from utils.stt.vad import vad_is_empty
 from utils.fair_use import (
     record_speech_ms,
     get_rolling_speech_ms,
@@ -75,6 +74,12 @@ logger = logging.getLogger(__name__)
 AUDIO_SAMPLE_RATE = 16000
 
 router = APIRouter()
+
+
+def _vad_is_empty(file_path: str, return_segments: bool = False, cache: bool = False):
+    from utils.stt.vad import vad_is_empty
+
+    return vad_is_empty(file_path, return_segments=return_segments, cache=cache)
 
 
 # **********************************************
@@ -636,7 +641,7 @@ def decode_files_to_wav(files_path: List[str]):
 def retrieve_vad_segments(path: str, segmented_paths: set, errors: list = None):
     try:
         start_timestamp = get_timestamp_from_path(path)
-        voice_segments = vad_is_empty(path, return_segments=True, cache=True)
+        voice_segments = _vad_is_empty(path, return_segments=True, cache=True)
     except Exception as e:
         error_msg = f"VAD failed for {path}: {str(e)}"
         logger.info(error_msg)

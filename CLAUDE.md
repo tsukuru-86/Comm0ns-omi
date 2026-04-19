@@ -277,6 +277,8 @@ See [docs/runbooks/logging.md](docs/runbooks/logging.md) for log commands.
 - Keep rules concise (one-line statements). No code examples or verbose prose in this file.
 - For significant changes to architecture, core flows, or APIs — update the Mintlify docs (`docs/`) in the same PR. Key files: `docs/doc/developer/backend/backend_deepdive.mdx` (architecture), `docs/doc/developer/backend/chat_system.mdx` (chat), `docs/doc/developer/backend/transcription.mdx` (STT pipeline).
 - If a PR changes how audio streaming, transcription, conversation lifecycle, speaker identification, or the listen/pusher WebSocket protocol works — update `docs/doc/developer/backend/listen_pusher_pipeline.mdx` in the same PR. This includes changes to timeouts, event types, processing flow, or inter-service communication between listen and pusher.
+- Obsidian Vault にプロジェクト内容を反映する時は、`01_つくる/Projects/<ProjectName>.md` の固定ノート 1 枚で管理し、概要は上部に維持しつつ `## 更新履歴` に日時付きで追記する。
+- `01_つくる/daily/YYYY-MM-DD.md` にはプロジェクトノートへの短いリンクか要約だけを追加し、内容の本体を daily 側へ重複展開しない。
 
 ## Testing
 Run `backend/test-preflight.sh` to verify environment. Run `backend/test.sh` (backend) or `app/test.sh` (app) before committing.

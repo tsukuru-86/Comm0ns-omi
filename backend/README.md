@@ -120,3 +120,7 @@ This README provides a quick setup guide for the Omi backend. For a comprehensiv
 - [Full Backend Setup Documentation](https://docs.omi.me/developer/backend/Backend_Setup)
 - [Omi Documentation](https://docs.omi.me/)
 - [Community Support](http://discord.omi.me)
+
+## Obsidianへの記録運用
+
+このバックエンドについて Obsidian Vault に記録を残す場合は、`01_つくる/Projects/<ProjectName>.md` の固定ノート 1 枚で管理する。上部にはプロジェクト概要と構成メモを維持し、更新内容は `## 更新履歴` に日時付きで追記する。`01_つくる/daily/YYYY-MM-DD.md` には、その固定ノートへのリンクまたは短い要約のみを追加し、同じ内容を日次ノートへ重複して展開しない。

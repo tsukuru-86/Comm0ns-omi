@@ -31,12 +31,13 @@ OPUS_FRAME_SIZE = OPUS_SAMPLE_RATE * OPUS_FRAME_DURATION_MS // 1000  # 320 sampl
 # Valid private cloud sync extensions (longest first for correct matching)
 PRIVATE_CLOUD_EXTENSIONS = ['.batch.enc', '.batch.bin', '.opus.enc', '.opus', '.enc', '.bin']
 
+project = os.getenv('GOOGLE_CLOUD_PROJECT') or os.getenv('FIREBASE_PROJECT_ID')
 if os.environ.get('SERVICE_ACCOUNT_JSON'):
     service_account_info = json.loads(os.environ["SERVICE_ACCOUNT_JSON"])
     credentials = service_account.Credentials.from_service_account_info(service_account_info)
-    storage_client = storage.Client(credentials=credentials)
+    storage_client = storage.Client(project=project or service_account_info.get('project_id'), credentials=credentials)
 else:
-    storage_client = storage.Client()
+    storage_client = storage.Client(project=project) if project else storage.Client()
 
 speech_profiles_bucket = os.getenv('BUCKET_SPEECH_PROFILES')
 postprocessing_audio_bucket = os.getenv('BUCKET_POSTPROCESSING')

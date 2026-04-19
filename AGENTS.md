@@ -143,6 +143,8 @@ Always format code after making changes. The pre-commit hook handles this automa
 
 - Update this file and `CLAUDE.md` in the same commit when rules change.
 - For architecture or core flow changes, update Mintlify docs (`docs/doc/developer/`) in the same PR.
+- Obsidian Vault にプロジェクト内容を反映する時は、`01_つくる/Projects/<ProjectName>.md` の固定ノート 1 枚で管理し、概要は上部に維持しつつ `## 更新履歴` に日時付きで追記する。
+- `01_つくる/daily/YYYY-MM-DD.md` にはプロジェクトノートへの短いリンクか要約だけを追加し、内容の本体を daily 側へ重複展開しない。
 
 ## Testing
 

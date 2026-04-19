@@ -6,11 +6,18 @@ description: "Sequence diagrams for the /v4/listen WebSocket and Pusher processi
 
 # Listen + Pusher Pipeline — Sequence Diagrams
 
-> Last updated: 2026-03-28 (PR #6061 — remove local fallback)
+> Last updated: 2026-04-06 (STT provider abstraction refactor)
 >
 > These diagrams document the real behavior observed during E2E testing with
 > live services (backend, pusher, Deepgram, embedding API). Update when the
 > pipeline changes.
+
+## 0. Provider Abstraction Notes
+
+- `/v4/listen` now resolves its realtime STT path through `ProviderSelector` + `ProviderRegistry`.
+- The current default path is still Deepgram, but the listen handler no longer depends on Deepgram-specific wiring directly.
+- Transcript normalization is handled by a post-processing pipeline after provider output and before persistence.
+- A separate finalize transcription service now exists for future high-accuracy reprocessing; conversation finalization still routes through pusher today.
 
 ## 1. Connection + Streaming + Transcription
 
@@ -25,7 +32,8 @@ sequenceDiagram
     Client->>Backend: WS connect (uid, language, sample_rate, codec)
     Backend->>Backend: Auth check (dev-token or Firebase)
     Backend->>Firestore: Create stub conversation (status=in_progress)
-    Backend->>Deepgram: Open STT WebSocket
+    Backend->>Backend: Resolve realtime provider (selector + registry)
+    Backend->>Deepgram: Open STT WebSocket (default provider)
     Backend->>Pusher: Open Pusher WebSocket
     Backend-->>Client: {type: "service_status", status: "ready"}
 
@@ -36,6 +44,7 @@ sequenceDiagram
         Backend->>Backend: Update last_activity_time
         Backend->>Deepgram: Forward audio
         Deepgram-->>Backend: Transcript segments
+        Backend->>Backend: Run transcript post-process pipeline
         Backend->>Backend: Update finished_at (only on real segments)
         Backend->>Firestore: Write transcript_segments
         Backend-->>Client: JSON array of segments [{id, text, speaker, ...}]
@@ -267,4 +276,3 @@ sequenceDiagram
 | `MAX_RETRIES_PER_REQUEST` | 3 | transcribe.py | Max retries before keeping buffered |
 | `PUSHER_MAX_RECONNECT_ATTEMPTS` | 6 | transcribe.py | Reconnect attempts before DEGRADED |
 | `MAX_PENDING_REQUESTS` | 100 | transcribe.py | Max buffered conversations per session |
-

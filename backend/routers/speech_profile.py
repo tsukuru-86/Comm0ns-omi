@@ -26,12 +26,17 @@ from utils.other.storage import (
     get_user_has_speech_profile,
 )
 from utils.stt.speaker_embedding import extract_embedding
-from utils.stt.vad import apply_vad_for_speech_profile
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _apply_vad_for_speech_profile(file_path: str):
+    from utils.stt.vad import apply_vad_for_speech_profile
+
+    return apply_vad_for_speech_profile(file_path)
 
 
 @router.get('/v3/speech-profile', tags=['v3'])
@@ -66,7 +71,7 @@ def upload_profile(file: UploadFile, uid: str = Depends(auth.get_current_user_ui
     if aseg.duration_seconds < 5 or aseg.duration_seconds > 120:
         raise HTTPException(status_code=400, detail="Audio duration is invalid (must be 5-120 seconds)")
 
-    apply_vad_for_speech_profile(file_path)
+    _apply_vad_for_speech_profile(file_path)
 
     # Write-ahead: Cache exact duration after VAD processing (use av for fast header-only read)
     with av.open(file_path) as container:

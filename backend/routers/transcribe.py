@@ -71,12 +71,14 @@ from utils.other import endpoints as auth
 from utils.other.storage import get_profile_audio_if_exists, get_user_has_speech_profile
 from utils.pusher import connect_to_trigger_pusher, PusherCircuitBreakerOpen, get_circuit_breaker, CircuitState
 from utils.speaker_identification import detect_speaker_from_text
-from utils.stt.streaming import (
-    STTService,
-    get_stt_service_for_language,
-    process_audio_dg,
-)
-from utils.stt.vad_gate import VADStreamingGate, VAD_GATE_MODE, is_gate_enabled
+from utils.stt.assembler import DefaultTranscriptAssembler
+from utils.stt.config import load_stt_configuration
+from utils.stt.contracts import STTContext, STTEvent, STTEventType
+from utils.stt.postprocess import TranscriptPostProcessingPipeline, build_default_post_processors
+from utils.stt.registry import get_default_provider_registry
+from utils.stt.runtime import open_realtime_stt_session
+from utils.stt.selector import ProviderSelector
+from utils.stt.streaming import get_stt_service_for_language
 from utils.fair_use import (
     FAIR_USE_ENABLED,
     FAIR_USE_CHECK_INTERVAL_SECONDS,
@@ -115,6 +117,12 @@ from utils.stt.speaker_embedding import (
 )
 from utils.speaker_sample_migration import maybe_migrate_person_samples
 from utils.log_sanitizer import sanitize, sanitize_pii
+
+
+def _get_vad_gate_runtime():
+    from utils.stt import vad_gate as vad_gate_module
+
+    return vad_gate_module
 
 logger = logging.getLogger(__name__)
 
@@ -309,13 +317,49 @@ async def _stream_handler(
     # Convert 'auto' to 'multi' for consistency
     language = 'multi' if language == 'auto' else language
 
-    # Determine the best STT service
-    stt_service, stt_language, stt_model = get_stt_service_for_language(
-        language, multi_lang_enabled=not single_language_mode
+    session_terminology = transcription_prefs.get('terminology', {}) or {}
+    ja_filler_cleanup_enabled = transcription_prefs.get('enable_ja_filler_cleanup', False)
+
+    def build_stt_context(
+        phase: str = 'realtime',
+        provider_hint_override: Optional[str] = None,
+        context_sample_rate: Optional[int] = None,
+        context_channels: Optional[int] = None,
+        conversation_id: Optional[str] = None,
+    ) -> STTContext:
+        return STTContext(
+            uid=uid,
+            session_id=session_id,
+            language=language,
+            sample_rate=context_sample_rate or sample_rate,
+            channels=context_channels or channels,
+            vocabulary=tuple(vocabulary[:100]),
+            source=source,
+            conversation_id=conversation_id,
+            provider_hint=stt_service if provider_hint_override is None else provider_hint_override,
+            multi_language_enabled=not single_language_mode,
+            terminology=session_terminology,
+            phase=phase,
+            metadata={'enable_ja_filler_cleanup': str(ja_filler_cleanup_enabled).lower()},
+        )
+
+    provider_registry = get_default_provider_registry()
+    provider_selector = ProviderSelector(provider_registry)
+    stt_configuration = load_stt_configuration(transcription_prefs)
+    transcript_assembler = DefaultTranscriptAssembler()
+    post_processing_pipeline = TranscriptPostProcessingPipeline(
+        build_default_post_processors(stt_configuration.enable_japanese_postprocessors)
     )
-    if not stt_service or not stt_language:
-        await websocket.close(code=1008, reason=f"The language is not supported, {language}")
-        return
+    active_realtime_provider_name = provider_selector.select_realtime(build_stt_context(), transcription_prefs).primary
+
+    stt_language = language
+    if active_realtime_provider_name == 'deepgram_streaming':
+        _, stt_language, stt_model = get_stt_service_for_language(language, multi_lang_enabled=not single_language_mode)
+        if not stt_language:
+            await websocket.close(code=1008, reason=f"The language is not supported, {language}")
+            return
+    else:
+        stt_model = None
 
     # Translation language (disabled in single language mode)
     translation_language = None
@@ -881,7 +925,7 @@ async def _stream_handler(
         removed_ids: List[str] = []
 
         if segments:
-            conversation.transcript_segments, updated_segments, removed_ids = TranscriptSegment.combine_segments(
+            conversation.transcript_segments, updated_segments, removed_ids = transcript_assembler.assemble(
                 conversation.transcript_segments, segments
             )
             if speaker_map_dirty:
@@ -926,18 +970,37 @@ async def _stream_handler(
         return
 
     # Process STT
-    deepgram_socket = None
+    realtime_stt_socket = None
 
     vad_gate = None
 
+    def on_stt_event(event: STTEvent):
+        nonlocal active_realtime_provider_name
+        if not event.segments:
+            return
+        active_realtime_provider_name = event.provider or active_realtime_provider_name
+        realtime_segment_buffers.extend(event.segments)
+
     def stream_transcript(segments):
-        nonlocal realtime_segment_buffers
-        # Note: DG timestamp remapping is handled inside GatedDeepgramSocket wrapper
-        realtime_segment_buffers.extend(segments)
+        provider_name = active_realtime_provider_name
+        annotated_segments = []
+        for segment in segments:
+            annotated = dict(segment)
+            annotated['stt_provider'] = annotated.get('stt_provider') or provider_name
+            annotated_segments.append(annotated)
+        on_stt_event(
+            STTEvent(
+                provider=provider_name,
+                event_type=STTEventType.final,
+                segments=annotated_segments,
+                is_final=True,
+            )
+        )
 
     async def _process_stt():
         nonlocal websocket_close_code
-        nonlocal deepgram_socket
+        nonlocal realtime_stt_socket
+        nonlocal active_realtime_provider_name
         try:
             if use_custom_stt:
                 logger.info(f"Custom STT mode enabled - using suggested transcripts from app {uid} {session_id}")
@@ -947,23 +1010,37 @@ async def _stream_handler(
                 # Create one STT connection per channel
                 for i, ch_config in enumerate(channel_configs):
 
-                    def make_multi_channel_callback(cfg):
-                        def cb(segments):
-                            for seg in segments:
-                                seg['is_user'] = cfg.is_user
-                                seg['speaker'] = cfg.speaker_label
-                            realtime_segment_buffers.extend(segments)
+                    def make_multi_channel_sink(cfg):
+                        def sink(event: STTEvent):
+                            remapped_segments = []
+                            for seg in event.segments:
+                                remapped = dict(seg)
+                                remapped['is_user'] = cfg.is_user
+                                remapped['speaker'] = cfg.speaker_label
+                                remapped['stt_provider'] = remapped.get('stt_provider') or event.provider
+                                remapped_segments.append(remapped)
+                            on_stt_event(
+                                STTEvent(
+                                    provider=event.provider,
+                                    event_type=event.event_type,
+                                    segments=remapped_segments,
+                                    is_final=event.is_final,
+                                    metadata=event.metadata,
+                                )
+                            )
 
-                        return cb
+                        return sink
 
-                    callback = make_multi_channel_callback(ch_config)
-                    stt_sockets_multi[i] = await process_audio_dg(
-                        callback,
-                        stt_language,
-                        TARGET_SAMPLE_RATE,
-                        1,
-                        model=stt_model,
+                    provider_handle = await open_realtime_stt_session(
+                        provider_registry,
+                        provider_selector,
+                        build_stt_context(context_sample_rate=TARGET_SAMPLE_RATE, context_channels=1),
+                        sink=make_multi_channel_sink(ch_config),
+                        transcription_prefs=transcription_prefs,
+                        is_active=lambda: websocket_active,
                     )
+                    stt_sockets_multi[i] = provider_handle.session
+                    active_realtime_provider_name = provider_handle.provider_name
                 logger.info(
                     f"Multi-channel STT connections established ({len(channel_configs)} channels) {uid} {session_id}"
                 )
@@ -975,12 +1052,13 @@ async def _stream_handler(
             # (the "8"/"16" refers to sample rate kHz, not bit depth).
             # DG always receives mono (channels=1), so clamp gate channels to 1.
             nonlocal vad_gate
+            vad_gate_runtime = _get_vad_gate_runtime()
             gate_enabled_by_override = vad_gate_override == 'enabled'
             gate_disabled_by_override = vad_gate_override == 'disabled'
-            if not gate_disabled_by_override and (is_gate_enabled() or gate_enabled_by_override):
-                gate_mode = 'active' if gate_enabled_by_override else VAD_GATE_MODE
+            if not gate_disabled_by_override and (vad_gate_runtime.is_gate_enabled() or gate_enabled_by_override):
+                gate_mode = 'active' if gate_enabled_by_override else vad_gate_runtime.VAD_GATE_MODE
                 try:
-                    vad_gate = VADStreamingGate(
+                    vad_gate = vad_gate_runtime.VADStreamingGate(
                         sample_rate=sample_rate,
                         channels=1,  # DG always receives mono (encoding=linear16, channels=1)
                         mode=gate_mode,
@@ -999,16 +1077,17 @@ async def _stream_handler(
                     logger.exception('VAD gate init failed, continuing without gate uid=%s session=%s', uid, session_id)
                     vad_gate = None
 
-            deepgram_socket = await process_audio_dg(
-                stream_transcript,
-                stt_language,
-                sample_rate,
-                1,
-                model=stt_model,
-                keywords=vocabulary[:100] if vocabulary else None,
+            provider_handle = await open_realtime_stt_session(
+                provider_registry,
+                provider_selector,
+                build_stt_context(context_channels=1),
+                sink=on_stt_event,
+                transcription_prefs=transcription_prefs,
                 vad_gate=vad_gate,
                 is_active=lambda: websocket_active,
             )
+            realtime_stt_socket = provider_handle.session
+            active_realtime_provider_name = provider_handle.provider_name
             return None
 
         except Exception as e:
@@ -2081,7 +2160,14 @@ async def _stream_handler(
 
                 for seg in newly_processed_segments:
                     current_session_segments[seg.id] = seg.speech_profile_processed
-                transcript_segments, _, _ = TranscriptSegment.combine_segments([], newly_processed_segments)
+                newly_processed_segments = await post_processing_pipeline.process(
+                    newly_processed_segments,
+                    build_stt_context(
+                        provider_hint_override=active_realtime_provider_name,
+                        conversation_id=current_conversation_id,
+                    ),
+                )
+                transcript_segments, _, _ = transcript_assembler.assemble([], newly_processed_segments)
 
             # Update transcript segments
             conversation = Conversation(**conversation_data)
@@ -2607,7 +2693,7 @@ async def _stream_handler(
             pusher_tasks.append(asyncio.create_task(pusher_heartbeat()))
 
         # Tasks
-        data_process_task = asyncio.create_task(receive_data(deepgram_socket))
+        data_process_task = asyncio.create_task(receive_data(realtime_stt_socket))
         stream_transcript_task = asyncio.create_task(stream_transcript_process())
         record_usage_task = asyncio.create_task(_record_usage_periodically())
 
@@ -2680,9 +2766,8 @@ async def _stream_handler(
                     if mc_stt_socket:
                         mc_stt_socket.finish()
             else:
-                if deepgram_socket:
-                    # GatedDeepgramSocket.finish() handles finalize automatically
-                    deepgram_socket.finish()
+                if realtime_stt_socket:
+                    realtime_stt_socket.finish()
         except Exception as e:
             logger.error(f"Error closing STT sockets: {e} {uid} {session_id}")
 
@@ -2844,7 +2929,7 @@ async def listen_handler(
         codec,
         channels,
         include_speech_profile,
-        None,
+        stt_service,
         conversation_timeout=conversation_timeout,
         source=source,
         custom_stt_mode=custom_stt_mode,
@@ -2863,6 +2948,7 @@ async def web_listen_handler(
     codec: str = 'pcm8',
     channels: int = 1,
     include_speech_profile: bool = True,
+    stt_service: Optional[str] = None,
     conversation_timeout: int = 120,
     source: Optional[str] = None,
     custom_stt: str = 'disabled',
@@ -2923,7 +3009,7 @@ async def web_listen_handler(
         codec,
         channels,
         include_speech_profile,
-        None,
+        stt_service,
         conversation_timeout=conversation_timeout,
         source=source,
         custom_stt_mode=custom_stt_mode,

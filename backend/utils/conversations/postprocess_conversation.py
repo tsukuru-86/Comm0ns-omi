@@ -6,11 +6,13 @@ import time
 from pydub import AudioSegment
 
 import database.conversations as conversations_db
-from database.users import get_user_store_recording_permission
+from database.users import get_user_store_recording_permission, get_user_transcription_preferences
 from models.conversation import *
 from utils.conversations.process_conversation import process_conversation, process_user_emotion
 from utils.other.storage import upload_postprocessing_audio, delete_postprocessing_audio, upload_conversation_recording
-from utils.stt.pre_recorded import deepgram_prerecorded, postprocess_words
+from utils.stt.contracts import STTContext
+from utils.stt.factory import build_finalize_service
+from utils.stt.pre_recorded import postprocess_words
 from utils.stt.speech_profile import get_speech_profile_matching_predictions
 from utils.stt.vad import vad_is_empty
 import logging
@@ -73,9 +75,18 @@ def postprocess_conversation(
         if aseg.frame_rate == 16000 and get_user_store_recording_permission(uid):
             upload_conversation_recording(file_path, uid, conversation_id)
 
-        speakers_count = len(set([segment.speaker for segment in conversation.transcript_segments]))
-        words = deepgram_prerecorded(signed_url, speakers_count=speakers_count)
-        fal_segments = postprocess_words(words, aseg.duration_seconds)
+        transcription_prefs = get_user_transcription_preferences(uid)
+        finalize_service = build_finalize_service(transcription_prefs)
+        stt_context = STTContext(
+            uid=uid,
+            session_id=conversation_id,
+            language=conversation.language or 'en',
+            sample_rate=aseg.frame_rate,
+            channels=aseg.channels,
+            phase='finalize',
+        )
+        finalize_result = asyncio.run(finalize_service.transcribe_url(signed_url, stt_context, transcription_prefs))
+        fal_segments = list(finalize_result.segments)
 
         # if new transcript is 90% shorter than the original, cancel post-processing, smth wrong with audio or FAL
         count = len(''.join([segment.text.strip() for segment in conversation.transcript_segments]))

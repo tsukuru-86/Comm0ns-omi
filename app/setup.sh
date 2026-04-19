@@ -25,6 +25,13 @@
 
 set -euo pipefail
 
+if command -v ruby >/dev/null 2>&1; then
+  GEM_USER_BIN="$(ruby -e 'print Gem.user_dir')/bin"
+  if [ -d "${GEM_USER_BIN}" ]; then
+    export PATH="${GEM_USER_BIN}:${PATH}"
+  fi
+fi
+
 echo "👋 Yo folks! Welcome to the OMI Mobile Project - We're hiring! Join us on Discord: http://discord.omi.me"
 echo "Prerequisites (stable versions, use these or higher):"
 echo ""
@@ -49,7 +56,9 @@ echo "- bash setup.sh android"
 echo ""
 
 
-API_BASE_URL=https://api.omiapi.com/
+API_BASE_URL="${API_BASE_URL:-https://api.omiapi.com/}"
+USE_WEB_AUTH="${USE_WEB_AUTH:-true}"
+USE_AUTH_CUSTOM_TOKEN="${USE_AUTH_CUSTOM_TOKEN:-true}"
 
 ######################################
 # Generate device suffix from hostname
@@ -140,8 +149,8 @@ function setup_provisioning_profile() {
 #################
 function setup_app_env() {
   echo API_BASE_URL=$API_BASE_URL > .dev.env
-  echo USE_WEB_AUTH=true >> .dev.env
-  echo USE_AUTH_CUSTOM_TOKEN=true >> .dev.env
+  echo USE_WEB_AUTH=$USE_WEB_AUTH >> .dev.env
+  echo USE_AUTH_CUSTOM_TOKEN=$USE_AUTH_CUSTOM_TOKEN >> .dev.env
 }
 
 # #######################

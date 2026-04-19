@@ -9,13 +9,18 @@ from deepgram import DeepgramClient, DeepgramClientOptions, LiveTranscriptionEve
 from deepgram.clients.live.v1 import LiveOptions
 
 from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket  # noqa: F401 — re-exported for backward compat
-from utils.stt.vad_gate import GatedDeepgramSocket
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 headers = {"Authorization": f"Token {os.getenv('DEEPGRAM_API_KEY')}", "Content-Type": "audio/*"}
+
+
+def _build_gated_socket(safe_conn, vad_gate):
+    from utils.stt.vad_gate import GatedDeepgramSocket
+
+    return GatedDeepgramSocket(safe_conn, gate=vad_gate)
 
 
 class STTService(str, Enum):
@@ -257,7 +262,7 @@ async def process_audio_dg(
 
     # Wrap with VAD gate if provided
     if vad_gate is not None:
-        return GatedDeepgramSocket(safe_conn, gate=vad_gate)
+        return _build_gated_socket(safe_conn, vad_gate)
     return safe_conn
 
 
