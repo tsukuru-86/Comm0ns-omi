@@ -27,6 +27,9 @@ if [ ! -x "${VENV_DIR}/bin/python" ]; then
     echo "  python3.11 -m venv .venv311 && source .venv311/bin/activate && pip install -r requirements.txt" >&2
     exit 1
 fi
+# Export so start_local.sh (exec'd at the end) picks the same venv instead of
+# re-running its own `.venv311` default check.
+export VENV_DIR
 export PATH="$(cd "${VENV_DIR}/bin" && pwd):${PATH}"
 
 set -a
