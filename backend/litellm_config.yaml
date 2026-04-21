@@ -1,0 +1,80 @@
+# LiteLLM proxy config for local/hybrid deployment.
+#
+# Maps every OpenAI / Anthropic / OpenRouter model name that Omi code references
+# to a local inference target:
+#   - Chat / completions -> vLLM on :8000 (Gemma 4 26B FP8 or whatever you serve)
+#   - Embeddings         -> Ollama on :11434 (nomic-embed-text)
+#
+# Override the upstream model via environment variables when starting LiteLLM:
+#   VLLM_MODEL_ID=gemma-4-26b-a4b-it-fp8
+#   VLLM_BASE_URL=http://localhost:8000/v1
+#   EMBED_MODEL_ID=nomic-embed-text
+#   EMBED_BASE_URL=http://localhost:11434
+#
+# See backend/LOCAL_HYBRID_SETUP.md for the full flow.
+
+model_list:
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: gpt-5.1
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: gpt-5.2
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: o1-preview
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: o4-mini
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: google/gemini-flash-1.5-8b
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: anthropic/claude-3.5-sonnet
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: google/gemini-3-flash-preview
+    litellm_params:
+      model: openai/os.environ/VLLM_MODEL_ID
+      api_base: os.environ/VLLM_BASE_URL
+      api_key: os.environ/VLLM_API_KEY
+
+  - model_name: text-embedding-3-large
+    litellm_params:
+      model: ollama/os.environ/EMBED_MODEL_ID
+      api_base: os.environ/EMBED_BASE_URL
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
