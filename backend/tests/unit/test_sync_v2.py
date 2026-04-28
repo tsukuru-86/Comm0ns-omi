@@ -100,6 +100,16 @@ class TestSyncV2Structure:
             'syncing/{uid}/{job_id}' in func_body or "f'syncing/{uid}/{job_id}/'" in func_body
         ), "v2 must use job-specific directory"
 
+    def test_sync_upload_filenames_are_validated_before_path_join(self):
+        """UploadFile.filename is client-controlled and must not allow path traversal."""
+        source = self._read_sync_source()
+
+        assert 'def _validated_sync_filename' in source
+        assert "'/' in filename" in source
+        assert "'\\\\' in filename" in source
+        assert 'os.path.basename(filename)' in source
+        assert 'filename = _validated_sync_filename(file.filename)' in source
+
     def test_v2_background_has_cleanup(self):
         """Background worker must clean up files in finally block."""
         source = self._read_sync_source()

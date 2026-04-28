@@ -59,6 +59,13 @@ void main() {
       expect(BleAudioCodec.opusFS320.isOpusSupported(), isTrue);
     });
 
+    test('PCM and Opus codecs are supported by WAL/custom STT path', () {
+      expect(BleAudioCodec.pcm16.isCustomSttSupported, isTrue);
+      expect(BleAudioCodec.pcm8.isCustomSttSupported, isTrue);
+      expect(BleAudioCodec.opus.isCustomSttSupported, isTrue);
+      expect(BleAudioCodec.opusFS320.isCustomSttSupported, isTrue);
+    });
+
     test('PCM16 frames per second is 100', () {
       expect(BleAudioCodec.pcm16.getFramesPerSecond(), 100);
     });

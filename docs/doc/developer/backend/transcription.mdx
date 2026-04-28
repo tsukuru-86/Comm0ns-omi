@@ -206,6 +206,12 @@ flowchart LR
     Capture -->|suggested_transcript| API
 ```
 
+If the Omi backend WebSocket is unavailable, the app keeps the custom/on-device
+STT socket running and surfaces those local transcript segments directly. When
+the backend socket is connected, local transcripts are forwarded as
+`suggested_transcript` events so Omi can enrich the conversation with server-side
+processing such as speaker identification.
+
 ### Your Service Receives
 
 | Message | Format | Description |
