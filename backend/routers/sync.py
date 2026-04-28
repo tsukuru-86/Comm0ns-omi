@@ -502,26 +502,37 @@ def get_timestamp_from_path(path: str):
     return timestamp
 
 
+def _validated_sync_filename(filename: Optional[str]) -> str:
+    """Return a safe basename for a sync upload or raise 400.
+
+    UploadFile.filename is client-controlled. Only accept plain file names so
+    sync uploads cannot write outside the user's temporary sync directory.
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="Invalid file format, missing filename")
+    if '/' in filename or '\\' in filename or filename != os.path.basename(filename):
+        raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, path separators not allowed")
+    if not filename.endswith('.bin'):
+        raise HTTPException(status_code=400, detail=f"Invalid file format {filename}")
+    if '_' not in filename:
+        raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, missing timestamp")
+    try:
+        timestamp = get_timestamp_from_path(filename)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
+
+    time = datetime.fromtimestamp(timestamp)
+    if time > datetime.now() or time < datetime(2024, 1, 1):
+        raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
+    return filename
+
+
 def retrieve_file_paths(files: List[UploadFile], uid: str):
     directory = f'syncing/{uid}/'
     os.makedirs(directory, exist_ok=True)
     paths = []
     for file in files:
-        filename = file.filename
-        # Validate the file is .bin and contains a _$timestamp.bin, if not, 400 bad request
-        if not filename.endswith('.bin'):
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}")
-        if '_' not in filename:
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, missing timestamp")
-        try:
-            timestamp = get_timestamp_from_path(filename)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
-
-        time = datetime.fromtimestamp(timestamp)
-        if time > datetime.now() or time < datetime(2024, 1, 1):
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
-
+        filename = _validated_sync_filename(file.filename)
         path = f"{directory}{filename}"
         try:
             with open(path, "wb") as buffer:
@@ -1289,20 +1300,7 @@ def _retrieve_file_paths_v2(files: List[UploadFile], uid: str, job_id: str):
     os.makedirs(directory, exist_ok=True)
     paths = []
     for file in files:
-        filename = file.filename
-        if not filename.endswith('.bin'):
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}")
-        if '_' not in filename:
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, missing timestamp")
-        try:
-            timestamp = get_timestamp_from_path(filename)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
-
-        time_val = datetime.fromtimestamp(timestamp)
-        if time_val > datetime.now() or time_val < datetime(2024, 1, 1):
-            raise HTTPException(status_code=400, detail=f"Invalid file format {filename}, invalid timestamp")
-
+        filename = _validated_sync_filename(file.filename)
         path = f"{directory}{filename}"
         try:
             with open(path, "wb") as buffer:

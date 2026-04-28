@@ -16,6 +16,7 @@ class CompositeTranscriptionSocket implements IPureSocket {
   final String? sttProvider;
 
   PureSocketStatus _status = PureSocketStatus.notConnected;
+  bool _secondaryAvailable = false;
   IPureSocketListener? _listener;
 
   late final _PrimarySocketListener _primaryListener;
@@ -51,27 +52,35 @@ class CompositeTranscriptionSocket implements IPureSocket {
     CustomSttLogService.instance.info('Composite', 'Connecting both sockets...');
     _status = PureSocketStatus.connecting;
 
-    final results = await Future.wait([primarySocket.connect(), secondarySocket.connect()]);
+    final results = await Future.wait([primarySocket.connect(), secondarySocket.connect().catchError((_) => false)]);
 
     final primaryOk = results[0] && primarySocket.status == PureSocketStatus.connected;
-    final secondaryOk = results[1] && secondarySocket.status == PureSocketStatus.connected;
+    _secondaryAvailable = results[1] && secondarySocket.status == PureSocketStatus.connected;
 
-    if (primaryOk && secondaryOk) {
+    if (primaryOk) {
       _status = PureSocketStatus.connected;
-      CustomSttLogService.instance.info('Composite', 'Both sockets connected');
+      CustomSttLogService.instance.info(
+        'Composite',
+        _secondaryAvailable ? 'Both sockets connected' : 'Primary socket connected, cloud enrichment unavailable',
+      );
       DebugLogManager.logEvent('composite_socket_connected', {
         'primary_status': primarySocket.status.toString(),
         'secondary_status': secondarySocket.status.toString(),
+        'secondary_available': _secondaryAvailable,
       });
       onConnected();
       return true;
     }
 
-    // Either failed - disconnect both and fail
-    CustomSttLogService.instance.error('Composite', 'Connection failed - primary: $primaryOk, secondary: $secondaryOk');
+    // Primary STT is required. The secondary Omi socket is optional so local
+    // transcription remains usable when the phone is offline.
+    CustomSttLogService.instance.error(
+      'Composite',
+      'Connection failed - primary: $primaryOk, secondary: $_secondaryAvailable',
+    );
     DebugLogManager.logWarning('composite_socket_connect_failed', {
       'primary_ok': primaryOk,
-      'secondary_ok': secondaryOk,
+      'secondary_ok': _secondaryAvailable,
       'primary_status': primarySocket.status.toString(),
       'secondary_status': secondarySocket.status.toString(),
     });
@@ -92,6 +101,7 @@ class CompositeTranscriptionSocket implements IPureSocket {
 
     await _disconnectBothQuietly();
 
+    _secondaryAvailable = false;
     _status = PureSocketStatus.disconnected;
     onClosed();
   }
@@ -103,6 +113,7 @@ class CompositeTranscriptionSocket implements IPureSocket {
 
     await Future.wait([primarySocket.stop(), secondarySocket.stop()]);
 
+    _secondaryAvailable = false;
     _status = PureSocketStatus.disconnected;
   }
 
@@ -112,10 +123,17 @@ class CompositeTranscriptionSocket implements IPureSocket {
       return; // Already handling disconnection
     }
 
-    CustomSttLogService.instance.warning(
-      'Composite',
-      '$name socket closed (code: $closeCode), disconnecting composite',
-    );
+    if (name == 'Secondary') {
+      _secondaryAvailable = false;
+      CustomSttLogService.instance.warning(
+        'Composite',
+        'Secondary socket closed (code: $closeCode), continuing with local transcription',
+      );
+      DebugLogManager.logEvent('composite_socket_secondary_closed', {'close_code': closeCode ?? -1});
+      return;
+    }
+
+    CustomSttLogService.instance.warning('Composite', '$name socket closed (code: $closeCode)');
     DebugLogManager.logEvent('composite_socket_child_closed', {'child_socket': name, 'close_code': closeCode ?? -1});
 
     _status = PureSocketStatus.disconnected;
@@ -126,6 +144,13 @@ class CompositeTranscriptionSocket implements IPureSocket {
   /// Called when either socket errors
   void _onSocketError(String name, Object err, StackTrace trace) {
     if (_status != PureSocketStatus.connected) {
+      return;
+    }
+
+    if (name == 'Secondary') {
+      _secondaryAvailable = false;
+      CustomSttLogService.instance.warning('Composite', 'Secondary socket error, continuing locally: $err');
+      DebugLogManager.logWarning('composite_socket_secondary_error', {'error': err.toString()});
       return;
     }
 
@@ -143,11 +168,17 @@ class CompositeTranscriptionSocket implements IPureSocket {
       return;
     }
     primarySocket.send(message);
-    secondarySocket.send(message);
+    if (_secondaryAvailable) {
+      secondarySocket.send(message);
+    }
   }
 
   void _onPrimaryMessage(dynamic message) {
-    _forwardAsSuggestedTranscript(message);
+    if (_secondaryAvailable) {
+      _forwardAsSuggestedTranscript(message);
+    } else {
+      onMessage(message);
+    }
   }
 
   void _forwardAsSuggestedTranscript(dynamic message) {
@@ -164,7 +195,9 @@ class CompositeTranscriptionSocket implements IPureSocket {
         payload['stt_provider'] = sttProvider;
       }
 
-      secondarySocket.send(jsonEncode(payload));
+      if (_secondaryAvailable) {
+        secondarySocket.send(jsonEncode(payload));
+      }
     } catch (e) {
       CustomSttLogService.instance.error('Composite', 'Error forwarding transcript: $e');
     }
